@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Backup script for Raspberry Pi running Docker Compose projects.
 # This script performs a hot (live) backup of each project:
-# 1. Safely dumps any SQLite databases via `sqlite3 .backup` (pihole).
+# 1. Exports Pi-hole config via Teleporter (no SQLite backup).
 # 2. Archives the project directory into a timestamped tar.gz file on the NAS.
 # No container stop/start is required — DNS and other services stay online.
 # The script also logs all operations and sends status updates to a locally hosted Uptime Kuma instance via HTTP requests.
@@ -94,33 +94,6 @@ verify_archive() {
   fi
 }
 
-# Safely back up SQLite databases inside a running container.
-# Uses sqlite3 .backup for a consistent snapshot without stopping the container.
-safe_backup_sqlite() {
-  local project="$1"
-  shift
-  local db_paths=("$@")
-
-  for db_path in "${db_paths[@]}"; do
-    local bak_path="${db_path}.bak"
-    log "Creating safe SQLite backup: $db_path -> $bak_path"
-    if ! docker exec "$project" sqlite3 "$db_path" ".backup '$bak_path'" 2>>"$LOGFILE"; then
-      log "ERROR: sqlite3 .backup failed for $db_path in $project"
-      return 1
-    fi
-  done
-}
-
-# Remove .bak files created by safe_backup_sqlite
-cleanup_sqlite_backups() {
-  local project="$1"
-  shift
-  local db_paths=("$@")
-
-  for db_path in "${db_paths[@]}"; do
-    docker exec "$project" rm -f "${db_path}.bak" 2>/dev/null || true
-  done
-}
 
 backup_project() {
   local project="$1"
@@ -134,15 +107,15 @@ backup_project() {
     return 1
   fi
 
-  # Pre-backup: create safe SQLite snapshots for pihole
-  local pihole_dbs=("/etc/pihole/gravity.db" "/etc/pihole/pihole-FTL.db")
+  # For pihole, use Teleporter export
   if [[ "$project" == "pihole" ]]; then
-    log "Creating safe SQLite snapshots for $project..."
-    if ! safe_backup_sqlite "$project" "${pihole_dbs[@]}"; then
-      log "ERROR: SQLite safe backup failed for $project, skipping"
-      cleanup_sqlite_backups "$project" "${pihole_dbs[@]}"
+    local teleporter_export="$BACKUP_ROOT/pihole-teleporter-$DATE.tar.gz"
+    log "Exporting Pi-hole configuration via Teleporter..."
+    if ! curl -fsSL -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
+      log "ERROR: Teleporter export failed for $project, skipping"
       return 1
     fi
+    log "Teleporter export saved: $teleporter_export"
   fi
 
   # Archive the project directory live (no container stop needed)
@@ -150,14 +123,10 @@ backup_project() {
   if ! tar -C "$BASE_DIR" -czf "$archive" "$project" 2>>"$LOGFILE"; then
     log "ERROR: failed to archive $project"
     rm -f "$archive"
-    [[ "$project" == "pihole" ]] && cleanup_sqlite_backups "$project" "${pihole_dbs[@]}"
     return 1
   fi
 
-  # Clean up SQLite backup files
-  if [[ "$project" == "pihole" ]]; then
-    cleanup_sqlite_backups "$project" "${pihole_dbs[@]}"
-  fi
+  #
 
   # Verify archive integrity
   if ! verify_archive "$archive"; then
