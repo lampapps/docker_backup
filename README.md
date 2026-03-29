@@ -6,13 +6,20 @@ Backs up: **pihole**, **caddy**, **cloudflared**
 
 ## How It Works
 
-1. Creates safe SQLite snapshots for pihole databases (`gravity.db`, `pihole-FTL.db`) using `sqlite3 .backup` inside the running container.
-2. Archives each project directory into a timestamped `.tar.gz` on the NAS.
+1. Exports Pi-hole configuration via the **Teleporter REST API** (v6+) and backs up its `docker-compose.yml`.
+2. Archives caddy and cloudflared project directories into timestamped `.tar.gz` files on the NAS.
 3. Verifies archive integrity.
-4. Reports status to Uptime Kuma.
+4. Reports status to Uptime Kuma via push notification.
 5. Cleans up backups older than the configured retention period.
 
 No containers are stopped or restarted.
+
+## Requirements
+
+- `bash`, `curl`, `jq`, `tar`, `sudo`
+- Pi-hole v6+ (REST API required for Teleporter export)
+- NAS mounted at `/mnt/nas-unas`
+- `sudo` access (required for archiving caddy's directories)
 
 ## Setup
 
@@ -23,9 +30,9 @@ No containers are stopped or restarted.
    nano backup.conf
    ```
 
-2. Set your `PUSH_TOKEN`, `BASE_DIR`, `BACKUP_ROOT`, and `PROJECTS` in `backup.conf`.
+2. Set your Pi-hole password, push token, paths, and project list in `backup.conf`.
 
-3. Ensure the NAS is mounted at the path configured in `BACKUP_ROOT` (e.g., `/mnt/nas-unas`).
+3. Ensure the NAS is mounted at the path configured in `BACKUP_ROOT`.
 
 4. Make the script executable:
 
@@ -50,7 +57,7 @@ sudo crontab -e
 Add:
 
 ```
-0 3 * * * /home/pi/containers_backup/backup.sh
+0 3 * * * /home/pi/scripts/docker_backup/backup.sh
 ```
 
 ## Configuration
@@ -59,8 +66,10 @@ All settings are in `backup.conf`. See `backup.conf.example` for defaults.
 
 | Variable | Description |
 |---|---|
+| `PIHOLE_API_URL` | Pi-hole REST API base URL (e.g., `http://127.0.0.1:8080`) |
+| `PIHOLE_PASSWORD` | Pi-hole admin password for API authentication |
 | `BASE_DIR` | Parent directory of Docker Compose project folders |
-| `BACKUP_ROOT` | Destination directory for archives and logs (on NAS) |
+| `BACKUP_ROOT` | Destination directory for backups and logs (on NAS) |
 | `PUSH_URL` | Uptime Kuma push API URL |
 | `PUSH_TOKEN` | Uptime Kuma push token (keep secret — file is gitignored) |
 | `RETENTION_DAYS` | Delete backups older than this many days |
@@ -69,73 +78,82 @@ All settings are in `backup.conf`. See `backup.conf.example` for defaults.
 
 ## Backup Output
 
-Archives are stored at `$BACKUP_ROOT` with the naming pattern:
+Files are stored at `$BACKUP_ROOT` with timestamped names:
 
+**Pi-hole** (Teleporter export + compose file):
 ```
-<project>-YYYY-MM-DD-HHMM.tar.gz
-```
-
-Example:
-
-```
-/mnt/nas-unas/backups/pi4-1/pihole-2026-03-23-0300.tar.gz
-/mnt/nas-unas/backups/pi4-1/caddy-2026-03-23-0300.tar.gz
-/mnt/nas-unas/backups/pi4-1/cloudflared-2026-03-23-0300.tar.gz
+pihole_teleporter_2026-03-28-0300.zip
+pihole-docker-compose-2026-03-28-0300.yml
 ```
 
-Logs are saved alongside the archives as `backup-YYYY-MM-DD-HHMM.log`.
+**Caddy / Cloudflared** (full directory archive):
+```
+caddy-2026-03-28-0300.tar.gz
+cloudflared-2026-03-28-0300.tar.gz
+```
+
+**Logs:**
+```
+backup-2026-03-28-0300.log
+```
 
 ## Restore
 
-### 1. Stop the project
+### Pi-hole
 
-```bash
-cd /home/pi/<project>
-docker compose down
-```
+Pi-hole is restored by importing the Teleporter export and redeploying with the backed-up compose file.
 
-### 2. Extract the backup
+1. Copy the backed-up compose file into place:
 
-Replace the project directory with the archived copy:
+   ```bash
+   mkdir -p /home/pi/pihole
+   cp /mnt/nas-unas/backups/pi4-1/pihole-docker-compose-YYYY-MM-DD-HHMM.yml /home/pi/pihole/docker-compose.yml
+   ```
 
-```bash
-cd /home/pi
-# Remove or rename the current project directory
-mv <project> <project>.broken
+2. Start the container:
 
-# Extract the backup
-tar -xzf /mnt/nas-unas/backups/pi4-1/<project>-YYYY-MM-DD-HHMM.tar.gz
-```
+   ```bash
+   cd /home/pi/pihole
+   docker compose up -d
+   ```
 
-### 3. Restore pihole databases
+3. Import the Teleporter backup via the Pi-hole web UI:
+   - Go to **Settings → Teleporter**
+   - Upload the `pihole_teleporter_YYYY-MM-DD-HHMM.zip` file
+   - Click **Restore**
 
-The backup contains SQLite `.bak` snapshots that are guaranteed consistent. Replace the live databases with these before starting:
+4. Verify DNS is working:
 
-```bash
-cd /home/pi/pihole
-# Find the volume-mounted pihole data directory (check docker-compose.yml for the bind mount path)
-# Replace the databases with the safe backup copies:
-cp etc-pihole/gravity.db.bak etc-pihole/gravity.db
-cp etc-pihole/pihole-FTL.db.bak etc-pihole/pihole-FTL.db
-```
+   ```bash
+   dig @127.0.0.1 example.com
+   ```
 
-> **Important:** Use the `.bak` files, not the original `.db` files. The `.bak` files were created with `sqlite3 .backup` and are guaranteed to be in a consistent state. The original `.db` files may have been mid-write when the archive was created.
+### Caddy / Cloudflared
 
-### 4. Start the project
+1. Stop the project:
 
-```bash
-cd /home/pi/<project>
-docker compose up -d
-```
+   ```bash
+   cd /home/pi/<project>
+   docker compose down
+   ```
 
-### 5. Verify
+2. Replace the project directory with the archived copy:
 
-```bash
-docker compose ps
-```
+   ```bash
+   cd /home/pi
+   mv <project> <project>.broken
+   tar -xzf /mnt/nas-unas/backups/pi4-1/<project>-YYYY-MM-DD-HHMM.tar.gz
+   ```
 
-For pihole, confirm DNS is resolving:
+3. Start the project:
 
-```bash
-dig @127.0.0.1 example.com
-```
+   ```bash
+   cd /home/pi/<project>
+   docker compose up -d
+   ```
+
+4. Verify:
+
+   ```bash
+   docker compose ps
+   ```

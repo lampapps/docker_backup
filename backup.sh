@@ -138,12 +138,21 @@ backup_project() {
     return 1
   fi
 
-  # For pihole, use Teleporter export via REST API (config only, no tar needed)
+  # For pihole, use Teleporter export via REST API + back up docker-compose.yml
   if [[ "$project" == "pihole" ]]; then
     log "Exporting Pi-hole configuration via REST API Teleporter..."
     if ! backup_pihole_teleporter_api; then
       log "ERROR: Pi-hole Teleporter API backup failed for $project, skipping"
       return 1
+    fi
+    # Back up docker-compose.yml for container rebuild
+    local compose_file="$project_dir/docker-compose.yml"
+    local compose_backup="$BACKUP_ROOT/pihole-docker-compose-$DATE.yml"
+    if [[ -f "$compose_file" ]]; then
+      cp "$compose_file" "$compose_backup"
+      log "Docker compose file backed up: $compose_backup"
+    else
+      log "WARN: No docker-compose.yml found at $compose_file"
     fi
     log "$project backup complete"
     return 0
