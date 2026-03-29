@@ -138,13 +138,15 @@ backup_project() {
     return 1
   fi
 
-  # For pihole, use Teleporter export via REST API
+  # For pihole, use Teleporter export via REST API (config only, no tar needed)
   if [[ "$project" == "pihole" ]]; then
     log "Exporting Pi-hole configuration via REST API Teleporter..."
     if ! backup_pihole_teleporter_api; then
       log "ERROR: Pi-hole Teleporter API backup failed for $project, skipping"
       return 1
     fi
+    log "$project backup complete"
+    return 0
   fi
 
   # Archive the project directory live (no container stop needed)
