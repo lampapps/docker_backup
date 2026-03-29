@@ -125,7 +125,7 @@ backup_project() {
     log "DEBUG: dig pihole.homeport.casa: $(dig +short pihole.homeport.casa 2>&1 | tr '\n' ' ')"
     log "DEBUG: hosts: $(cat /etc/hosts | tr '\n' ' ')"
     log "DEBUG: resolv.conf: $(cat /etc/resolv.conf | tr '\n' ' ')"
-    if ! curl -fsSL -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
+    if ! curl -fsSL -A "Mozilla/5.0" -e "https://pihole.homeport.casa/admin/settings/teleporter" -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
       log "ERROR: Teleporter export failed for $project, skipping"
       return 1
     fi
