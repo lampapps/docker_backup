@@ -109,6 +109,10 @@ backup_project() {
 
   # For pihole, use Teleporter export
   if [[ "$project" == "pihole" ]]; then
+    if [[ -z "${PIHOLE_TELEPORTER_URL:-}" ]]; then
+      log "ERROR: PIHOLE_TELEPORTER_URL is not set. Please set it in backup.conf."
+      return 1
+    fi
     local teleporter_export="$BACKUP_ROOT/pihole-teleporter-$DATE.tar.gz"
     log "Exporting Pi-hole configuration via Teleporter..."
     if ! curl -fsSL -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
