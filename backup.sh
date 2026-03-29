@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Backup script for Raspberry Pi running Docker Compose projects.
 # This script performs a hot (live) backup of each project:
-# 1. Exports Pi-hole config via Teleporter (no SQLite backup).
-# 2. Archives the project directory into a timestamped tar.gz file on the NAS.
+# 1. Exports Pi-hole config via Teleporter REST API.
+# 2. Archives each project directory into a timestamped tar.gz file on the NAS.
 # No container stop/start is required — DNS and other services stay online.
 # The script also logs all operations and sends status updates to a locally hosted Uptime Kuma instance via HTTP requests.
 #
 # Designed for cron execution - all output goes to log file.
 # Use -v flag for verbose output to terminal (for testing).
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # Usage:
 # Terminal: sudo ./backup.sh -v
@@ -59,8 +59,7 @@ log() {
   return 0
 }
 
-# Debug: show value of PIHOLE_TELEPORTER_URL after sourcing config and defining log
-log "DEBUG: PIHOLE_TELEPORTER_URL is '${PIHOLE_TELEPORTER_URL:-unset}'"
+
 
 report_status() {
   local status="$1"
@@ -82,10 +81,11 @@ cleanup_lock() {
 
 cleanup_old_backups() {
   log "Cleaning up backups older than $RETENTION_DAYS days..."
-  local deleted_archives deleted_logs
+  local deleted_archives deleted_teleporter deleted_logs
   deleted_archives=$(find "$BACKUP_ROOT" -name "*.tar.gz" -type f -mtime +$RETENTION_DAYS -print -delete 2>/dev/null | wc -l)
+  deleted_teleporter=$(find "$BACKUP_ROOT" -name "pihole_teleporter_*.zip" -type f -mtime +$RETENTION_DAYS -print -delete 2>/dev/null | wc -l)
   deleted_logs=$(find "$BACKUP_ROOT" -name "backup-*.log" -type f -mtime +$RETENTION_DAYS -print -delete 2>/dev/null | wc -l)
-  log "Retention cleanup: removed $deleted_archives archives, $deleted_logs logs"
+  log "Retention cleanup: removed $deleted_archives archives, $deleted_teleporter teleporter exports, $deleted_logs logs"
 }
 
 verify_archive() {
@@ -97,6 +97,34 @@ verify_archive() {
   fi
 }
 
+# Pi-hole Teleporter backup via REST API (v6+)
+backup_pihole_teleporter_api() {
+  local backup_file="$BACKUP_ROOT/pihole_teleporter_${DATE}.zip"
+
+  local token
+  token=$(curl -s -X POST "${PIHOLE_API_URL}/api/auth" \
+    -H "Content-Type: application/json" \
+    -d "{\"password\":\"${PIHOLE_PASSWORD}\"}" | jq -r '.session.sid')
+
+  if [[ -z "$token" || "$token" == "null" ]]; then
+    log "ERROR: Pi-hole API authentication failed"
+    return 1
+  fi
+
+  if ! curl -s -X GET "${PIHOLE_API_URL}/api/teleporter" \
+    -H "sid: $token" \
+    --output "$backup_file"; then
+    log "ERROR: Pi-hole Teleporter API export failed"
+    curl -s -X DELETE "${PIHOLE_API_URL}/api/auth" -H "sid: $token" > /dev/null
+    return 1
+  fi
+
+  local file_size
+  file_size=$(du -h "$backup_file" | cut -f1)
+  log "Teleporter export saved: $backup_file ($file_size)"
+
+  curl -s -X DELETE "${PIHOLE_API_URL}/api/auth" -H "sid: $token" > /dev/null
+}
 
 backup_project() {
   local project="$1"
@@ -110,26 +138,13 @@ backup_project() {
     return 1
   fi
 
-  # For pihole, use Teleporter export
+  # For pihole, use Teleporter export via REST API
   if [[ "$project" == "pihole" ]]; then
-    if [[ -z "${PIHOLE_TELEPORTER_URL:-}" ]]; then
-      log "ERROR: PIHOLE_TELEPORTER_URL is not set. Please set it in backup.conf."
+    log "Exporting Pi-hole configuration via REST API Teleporter..."
+    if ! backup_pihole_teleporter_api; then
+      log "ERROR: Pi-hole Teleporter API backup failed for $project, skipping"
       return 1
     fi
-    local teleporter_export="$BACKUP_ROOT/pihole-teleporter-$DATE.tar.gz"
-    log "Exporting Pi-hole configuration via Teleporter..."
-    log "DEBUG: whoami: $(whoami)"
-    log "DEBUG: which curl: $(which curl)"
-    log "DEBUG: curl version: $(curl --version | head -n 1)"
-    log "DEBUG: nslookup pihole.homeport.casa: $(nslookup pihole.homeport.casa 2>&1 | tr '\n' ' ')"
-    log "DEBUG: dig pihole.homeport.casa: $(dig +short pihole.homeport.casa 2>&1 | tr '\n' ' ')"
-    log "DEBUG: hosts: $(cat /etc/hosts | tr '\n' ' ')"
-    log "DEBUG: resolv.conf: $(cat /etc/resolv.conf | tr '\n' ' ')"
-    if ! curl -fsSL -A "Mozilla/5.0" -e "https://pihole.homeport.casa/admin/settings/teleporter" -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
-      log "ERROR: Teleporter export failed for $project, skipping"
-      return 1
-    fi
-    log "Teleporter export saved: $teleporter_export"
   fi
 
   # Archive the project directory live (no container stop needed)
@@ -147,8 +162,6 @@ backup_project() {
       return 1
     fi
   fi
-
-  #
 
   # Verify archive integrity
   if ! verify_archive "$archive"; then
