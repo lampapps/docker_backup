@@ -118,6 +118,13 @@ backup_project() {
     fi
     local teleporter_export="$BACKUP_ROOT/pihole-teleporter-$DATE.tar.gz"
     log "Exporting Pi-hole configuration via Teleporter..."
+    log "DEBUG: whoami: $(whoami)"
+    log "DEBUG: which curl: $(which curl)"
+    log "DEBUG: curl version: $(curl --version | head -n 1)"
+    log "DEBUG: nslookup pihole.homeport.casa: $(nslookup pihole.homeport.casa 2>&1 | tr '\n' ' ')"
+    log "DEBUG: dig pihole.homeport.casa: $(dig +short pihole.homeport.casa 2>&1 | tr '\n' ' ')"
+    log "DEBUG: hosts: $(cat /etc/hosts | tr '\n' ' ')"
+    log "DEBUG: resolv.conf: $(cat /etc/resolv.conf | tr '\n' ' ')"
     if ! curl -fsSL -o "$teleporter_export" "$PIHOLE_TELEPORTER_URL"; then
       log "ERROR: Teleporter export failed for $project, skipping"
       return 1
@@ -127,10 +134,18 @@ backup_project() {
 
   # Archive the project directory live (no container stop needed)
   log "Archiving $project..."
-  if ! tar -C "$BASE_DIR" -czf "$archive" "$project" 2>>"$LOGFILE"; then
-    log "ERROR: failed to archive $project"
-    rm -f "$archive"
-    return 1
+  if [[ "$project" == "caddy" ]]; then
+    if ! sudo tar -C "$BASE_DIR" -czf "$archive" "$project" 2>>"$LOGFILE"; then
+      log "ERROR: failed to archive $project (sudo required)"
+      rm -f "$archive"
+      return 1
+    fi
+  else
+    if ! tar -C "$BASE_DIR" -czf "$archive" "$project" 2>>"$LOGFILE"; then
+      log "ERROR: failed to archive $project"
+      rm -f "$archive"
+      return 1
+    fi
   fi
 
   #
