@@ -42,9 +42,6 @@ fi
 # shellcheck source=backup.conf
 source "$CONFIG_FILE"
 
-# Debug: show value of PIHOLE_TELEPORTER_URL after sourcing config
-log "DEBUG: PIHOLE_TELEPORTER_URL is '${PIHOLE_TELEPORTER_URL:-unset}'"
-
 DATE="$(date +%F-%H%M)"
 LOGFILE="$BACKUP_ROOT/backup-$DATE.log"
 LOCKFILE="/tmp/docker-backup.lock"
@@ -61,6 +58,9 @@ log() {
   [[ $VERBOSE -eq 1 ]] && echo "$msg"
   return 0
 }
+
+# Debug: show value of PIHOLE_TELEPORTER_URL after sourcing config and defining log
+log "DEBUG: PIHOLE_TELEPORTER_URL is '${PIHOLE_TELEPORTER_URL:-unset}'"
 
 report_status() {
   local status="$1"
