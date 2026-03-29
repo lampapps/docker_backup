@@ -1,0 +1,20 @@
+### backup.conf — Configuration for backup.sh ###
+
+# Base directory containing Docker Compose project folders
+BASE_DIR="/home/pi"
+
+# Where backups and logs are stored (must be on mounted NAS)
+BACKUP_ROOT="/mnt/nas-unas/backups/pi4-1"
+
+# Uptime Kuma push notification settings
+PUSH_URL="http://10.10.2.40:3001/api/push"
+PUSH_TOKEN="your-push-token-here"
+
+# Retention period for old backups (days)
+RETENTION_DAYS=30
+
+# Minimum free space required on backup volume (MB)
+MIN_SPACE_MB=500
+
+# Docker Compose projects to back up
+PROJECTS=("pihole" "caddy" "cloudflared")
