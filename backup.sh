@@ -243,7 +243,6 @@ if [[ "$available_mb" -lt "$MIN_SPACE_MB" ]]; then
   exit 1
 fi
 
-report_status "up" "Backup started"
 log "===== Docker Compose Backup v$VERSION Started: $DATE ====="
 log "Available disk space: ${available_mb}MB"
 
